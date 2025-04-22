@@ -51,11 +51,39 @@ static ICFG* currentICFG;
 static std::string lastAnalyzedModule;
 
 public:
-    static SVFIR* get_pag(std::string bitcodePath, bool buildSVFG = false) {
+    static SVFIR* get_pag(std::string bitcodePath, bool buildSVFG = false, std::string command = "") {
         std::vector<std::string> moduleNameVec = { bitcodePath };
-        Options::UsePreCompFieldSensitive.setValue(false);
-        Options::ModelConsts.setValue(true);
-        Options::ModelArrays.setValue(true);
+//        Options::UsePreCompFieldSensitive.setValue(false);
+//        Options::ModelConsts.setValue(true);
+//        Options::ModelArrays.setValue(true);
+        if (command == "-ander") {
+            Options::PASelected.parseAndSetValue("ander");
+        }
+        else if (command == "-fspta")
+        {
+            Options::PASelected.parseAndSetValue("fspta");
+        }
+        else if (command == "-vfspta")
+        {
+            Options::PASelected.parseAndSetValue("vfspta");
+        }
+        else if (command == "-type")
+        {
+            Options::PASelected.parseAndSetValue("type");
+        }
+        else if (command == "-sfrander")
+        {
+            Options::PASelected.parseAndSetValue("sfrander");
+        }
+        else if (command == "-sander")
+        {
+            Options::PASelected.parseAndSetValue("sander");
+        }
+        else if (command == "-steens")
+        {
+            Options::PASelected.parseAndSetValue("steens");
+        }
+
         LLVMModuleSet::buildSVFModule(moduleNameVec);
         SVFIRBuilder builder;
         SVFIR* pag = builder.build();
@@ -1873,6 +1901,53 @@ void bind_andersen_base(py::module& m) {
 
 }
 
+
+
+
+// Bind PublicWPAPass and AliasCheckRule
+void bind_WPA_pass(py::module& m) {
+    // Define PublicWPAPass class
+    class PublicWPAPass : public SVF::WPAPass {
+    public:
+        using WPAPass::WPAPass; // Inherit constructors
+
+        // Expose public methods of WPAPass
+        using WPAPass::getPts;
+        using WPAPass::PrintAliasPairs;
+        using WPAPass::getModRefInfo;
+        using WPAPass::runOnModule;
+        using WPAPass::getPassName;
+
+        // Override methods if needed
+        ModRefInfo getModRefInfo(const CallICFGNode* callInst) override {
+            return WPAPass::getModRefInfo(callInst);
+        }
+    };
+    // Bind AliasCheckRule enum
+    py::enum_<SVF::WPAPass::AliasCheckRule>(m, "AliasCheckRule", "Alias checking rules")
+        .value("Conservative", SVF::WPAPass::AliasCheckRule::Conservative, "Return MayAlias if any PTA says alias")
+        .value("Veto", SVF::WPAPass::AliasCheckRule::Veto, "Return NoAlias if any PTA says no alias")
+        .value("Precise", SVF::WPAPass::AliasCheckRule::Precise, "Return alias result by the most precise PTA")
+        .export_values();
+
+    // Bind PublicWPAPass class
+    py::class_<PublicWPAPass, std::shared_ptr<PublicWPAPass>>(m, "WPAPass", "Whole Program Analysis Pass")
+        .def(py::init<>(), "Constructor needs TargetLibraryInfo to be passed to the AliasAnalysis")
+        .def("run_on_module", [](PublicWPAPass& wpa, SVFIR *svf_module) {
+            wpa.runOnModule(svf_module);
+        }, py::arg("svf_module"), "Run pointer analysis on SVFModule")
+       .def("get_pts", [](PublicWPAPass& wpa, NodeID id) {
+            return wpa.getPts(id);
+        }, py::arg("id"), py::return_value_policy::reference, "Retrieve points-to set information")
+        .def("get_mod_ref_info", [](PublicWPAPass& wpa, const CallICFGNode* callInst) {
+            return wpa.getModRefInfo(callInst);
+        }, py::arg("callInst"), "Interface of mod-ref analysis to determine whether a CallSite instruction can mod or ref any memory location")
+        .def("print_alias_pairs", [](PublicWPAPass& wpa, PointerAnalysis* pta) {
+            wpa.PrintAliasPairs(pta);
+        }, py::arg("pta"), "Print all alias pairs")
+        .def("get_pass_name", &PublicWPAPass::getPassName, "PTA name");
+}
+
 void bind_points_to(py::module& m) {
     py::class_<PointsTo, std::shared_ptr<PointsTo>>(m, "PointsTo", "Points-to set")
         .def(py::init<>())  // 默认构造
@@ -2330,6 +2405,7 @@ PYBIND11_MODULE(pysvf, m) {
     m.def("get_pag", &PySVF::get_pag, 
         py::arg("bitcode_path"),  // Name the first parameter
         py::arg("build_svfg") = false,  // Name the second parameter with default value
+        py::arg("command") = "",  // Name the third parameter with default value
         py::return_value_policy::reference, 
         "Analyze LLVM bitcode and return SVFIR");
     m.def("release_pag", &PySVF::release_pag, "Release SVFIR and LLVMModuleSet");
@@ -2346,9 +2422,9 @@ PYBIND11_MODULE(pysvf, m) {
     bind_svfg_node(m);
     bind_vfg(m);   
     bind_svfg(m);  
-    bind_andersen_base(m);  
+    bind_andersen_base(m);
+    bind_WPA_pass(m);
     bind_points_to(m);
     bind_constraint_graph(m);
     bind_abstract_state(m);
-
 }
